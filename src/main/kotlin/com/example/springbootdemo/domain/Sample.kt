@@ -11,7 +11,7 @@ import jakarta.persistence.Table
  * 상태 변경은 반드시 도메인 메서드로만 하고, 불변식은 도메인이 스스로 지킨다.
  * 신규 생성은 [create] 팩토리 → 저장 시 IDENTITY 전략으로 id가 발급된다.
  * 공통 필드(id/createdAt/updatedAt/deletedAt)는 [BaseEntity]가,
- * 중복 처리 가드용 requestId는 [BaseIdempotencyEntity]가 관리한다.
+ * 중복 처리 가드용 idempotencyKey는 [BaseIdempotencyEntity]가 관리한다.
  */
 @Entity
 @Table(name = "sample")

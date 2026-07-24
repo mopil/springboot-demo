@@ -39,7 +39,7 @@ com.example.springbootdemo
 |---|---|---|
 | `/api` | `ApiPath.API` | 클라이언트로 나가는 외부 API |
 | `/internal` | `ApiPath.INTERNAL` | 서버 to 서버 호출 API (인증 불필요) |
-| `/admin` | `ApiPath.ADMIN` | 어드민 API (별도 어드민 인증 필요) |
+| `/admin` | `ApiPath.ADMIN` | 어드민 API (인증은 현재 스코프 밖 — 추후 필요 시 추가, 요구가 오면 tech-spec 먼저) |
 | `/dummy` | `ApiPath.DUMMY` | 더미데이터 생성 API (local/test phase 전용) |
 
 ```kotlin
@@ -49,7 +49,7 @@ com.example.springbootdemo
 ### API 설계 규약 (필수)
 
 1. **응답은 항상 JSON 객체로 내린다** — 최상위가 배열(`List<...>`)인 응답 금지. 목록은 `PageResponse`/`SliceResponse`로 감싸거나, Response 내부의 리스트 필드로 감싼다 (요소는 Response 내부 nested class, 예: `Response(tests: List<Item>)`).
-2. **빈 응답이 내려가는 경우를 없앤다** — 반환 타입 `Response?` 금지, 바디 없는 200/204 금지. 삭제/수정처럼 돌려줄 데이터가 없어도 최소한 식별자·상태를 담은 Response를 내린다.
+2. **빈 응답이 내려가는 경우를 없앤다** — 반환 타입 `Response?` 금지, 바디 없는 200/204 금지, **`ResponseEntity` 반환 금지**(ArchUnit 강제 — Response DTO를 직접 반환하고 상태코드는 `@ResponseStatus`로). 삭제/수정처럼 돌려줄 데이터가 없어도 최소한 식별자·상태를 담은 Response를 내린다.
 3. **발생 가능한 예외와 에러코드를 Swagger에 명시한다** — 공통 에러(400 `INVALID_REQUEST`, 500 `INTERNAL_ERROR`)는 `SwaggerCommonErrorCustomizer`가 전 API에 자동 부착하므로, 핸들러에는 **그 API 고유 에러(404 등)만** `@ApiResponses`로 명시한다 (content 스키마는 `ErrorResponse`).
 4. **조회성 API는 원칙적으로 예외를 내지 않는다** (조회 실패가 호출측 서비스 크래시로 번지는 것 방지) — 목록은 빈 리스트, 옵셔널한 데이터는 기본값으로 응답. 단, **비즈니스적으로 조회 데이터가 중요한 경우**(결제/정산 정보 등 없으면 진행 불가)는 예외 허용.
 5. **전체 데이터 수정은 `PUT`, 일부 데이터 수정은 `PATCH`**로 매핑한다.
@@ -58,6 +58,7 @@ com.example.springbootdemo
    - **클라이언트가 "시도 1회당 1개"의 UUID(v4)를 발급**해 Request 바디의 `idempotencyKey` 필드로 전송한다 — Request DTO가 **`IdempotencyRequest` 인터페이스를 구현**해 가드 대상임이 타입에 드러나게 한다. 재시도(더블클릭·타임아웃 재전송)에는 같은 키를 재사용하고, 성공/새 시도에만 새 키를 발급한다.
    - 대상 엔티티는 **`BaseIdempotencyEntity`를 상속** — 그 키를 `idempotencyKey` **유니크 컬럼**으로 저장해 첫 요청이 키를 선점한다 (도메인 데이터와 같은 트랜잭션 영속 — 재시작·다중 인스턴스에도 유지, TTL 불필요).
    - 검사 2중: ① 서비스가 `findByIdempotencyKey` 사전 조회 → 있으면 **409 DUPLICATE_REQUEST** (debugMessage에 기존 id 포함), ② 동시 이중 요청은 **DB 유니크 제약이 원자적으로 차단** — `DataIntegrityViolationException`을 catch해 409로 변환한다. **응답 유실 후 재시도까지 차단된다** (같은 키로 오므로).
+   - catch 범위 주의: **클라 키가 있을 때만** 409로 변환하고 그 외 무결성 위반은 그대로 전파한다. 엔티티에 다른 유니크 제약이 추가되면 제약명 검사로 더 좁힐 것. 이 패턴은 IDENTITY 전략(저장 즉시 insert → 그 자리에서 예외) 전제다 — SEQUENCE로 바꾸면 예외가 커밋 시점으로 밀려 catch를 빗나간다.
    - `findByIdempotencyKey`는 **소프트딜리트 포함이 의도** (처리 "이력" 기준) — `DeletedAtIsNull`을 붙이지 말 것.
    - 키가 null이면 서버가 발급(fallback)하고 **가드는 적용되지 않는다** (테스트 편의 — 응답 바디의 `idempotencyKey`로 확인 가능).
    - 핸들러에는 `@IdempotencyGuard(note = ...)`(`config/IdempotencyGuard`)를 붙인다 — Swagger에 가드 배지 자동 표기(`SwaggerIdempotencyGuardCustomizer`) + 409 응답을 `@ApiResponses`에 명시.
@@ -216,14 +217,16 @@ class FooServiceTest {
 - **비즈니스 로직은 엔티티를 rich하게 사용한다** — 상태 변경·불변식 검증·비즈니스 판단은 도메인 엔티티의 메서드로 둔다. Service는 오케스트레이션(조회 → 도메인 메서드 호출 → 저장)과 트랜잭션 경계만 담당하고, 도메인의 상태를 밖에서 직접 조작하지 않는다 (setter/copy로 상태 바꾸기 금지).
 - **Aggregate Root 패턴을 차용한다**:
   - 함께 변경되는 엔티티 묶음(애그리거트)은 루트 엔티티를 통해서만 접근·변경한다 (예: `Order`가 루트면 `OrderLine` 추가/제거는 `order.addLine(...)`으로만).
+  - 루트의 컬렉션 연관은 **`cascade = [CascadeType.ALL], orphanRemoval = true`**로 매핑해 루트 `save()`만으로 애그리거트 전체가 영속되게 한다.
   - **Repository는 aggregate root 단위로만 만든다** (`OrderRepository`는 있어도 `OrderLineRepository`는 만들지 않는다). 조회·저장도 루트 단위.
   - 애그리거트 간 참조는 객체 참조 대신 **id 참조**로 한다.
 - 불변식이 깨지는 호출은 도메인 메서드 안에서 `BusinessException`을 던진다 (도메인이 스스로 정합성을 지킨다).
 - **엔티티 규칙 (필수)**:
   - **도메인 = JPA 엔티티 겸용**이며 **절대 `data class`로 선언하지 않는다** (equals/hashCode/copy가 JPA 프록시·가변 상태와 충돌). 일반 class + `var` + `protected set`.
   - **모든 엔티티는 `domain/BaseEntity`(abstract, `@MappedSuperclass`)를 상속**한다. 공통 필드: `id`(PK, 기본값 `NEW_ID(0L)`, IDENTITY 오토인크리먼트), `createdAt`/`updatedAt`(JPA Auditing 자동 — `config/JpaConfig`의 `@EnableJpaAuditing`), `deletedAt`(소프트딜리트).
-  - 중복 처리 가드가 필요한 엔티티는 `domain/BaseIdempotencyEntity`(BaseEntity 상속 + `requestId` 유니크 컬럼)를 상속한다 (API 설계 규약 7 참고).
-  - **id 발급 관례**: 신규 도메인은 `create()` 팩토리(id 미지정 → `NEW_ID`)로 만들고 저장 시 발급된다. id를 밖에서 지정하지 않는다 (InMemory 테스트 픽스처 제외).
+  - 중복 처리 가드가 필요한 엔티티는 `domain/BaseIdempotencyEntity`(BaseEntity 상속 + `idempotencyKey` 유니크 컬럼)를 상속한다 (API 설계 규약 7 참고).
+  - **id 발급 관례**: 신규 도메인은 `create()` 팩토리(id 미지정 → `NEW_ID`)로 만들고 저장 시 발급된다. id를 밖에서 지정하지 않는다 (테스트 픽스처 제외).
+  - **동시 갱신 경합 관례** (재고 차감·잔액 변경 등): 멱등 가드는 "같은 요청의 중복"만 막고 **서로 다른 요청의 동시 갱신(lost update)은 막지 못한다.** 경합 요구가 오면 기본은 **비관락** — repository에 `@Lock(LockModeType.PESSIMISTIC_WRITE)` 파생 조회를 추가하고 "락 조회 → 도메인 메서드 → 저장"을 한 트랜잭션에서 수행한다. 경합이 드물면 해당 엔티티에 `@Version` 낙관락 + 충돌 시 409 변환을 대안으로 쓴다.
   - **소프트딜리트 관례**: 도메인의 `delete()`가 불변식 검사 후 BaseEntity의 `markDeleted()`를 호출한다. repository 조회 메서드는 삭제분을 제외한다 (`findByIdAndDeletedAtIsNull` 등).
 
 ```kotlin

@@ -23,7 +23,7 @@ enum class ErrorCode(
     NOT_FOUND("요청한 정보를 찾을 수 없습니다", HttpStatus.NOT_FOUND, Level.INFO),
     INTERNAL_ERROR("일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요", HttpStatus.INTERNAL_SERVER_ERROR, Level.ERROR),
     DUMMY_NOT_ALLOWED("허용되지 않은 요청입니다", HttpStatus.FORBIDDEN, Level.ERROR, "dummy 기능은 local/test phase에서만 호출 가능"),
-    DUPLICATE_REQUEST("이미 처리된 요청입니다", HttpStatus.CONFLICT, Level.WARN, "이미 처리된 X-Request-Id로 재요청"),
+    DUPLICATE_REQUEST("이미 처리된 요청입니다", HttpStatus.CONFLICT, Level.WARN, "동일 멱등키(idempotencyKey)로 중복 요청"),
 
     // Sample 도메인
     SAMPLE_NOT_FOUND("샘플 정보를 찾을 수 없습니다", HttpStatus.NOT_FOUND, Level.INFO, "요청한 id의 샘플이 없거나 삭제됨"),

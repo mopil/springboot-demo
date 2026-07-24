@@ -85,7 +85,8 @@ interface SampleService {
                 try {
                     sampleRepository.save(Sample.create(name = command.name, memo = command.memo, idempotencyKey = command.idempotencyKey))
                 } catch (e: DataIntegrityViolationException) {
-                    // 동시 이중 요청 — 사전 조회를 통과해도 유니크 제약이 원자적으로 차단한다
+                    // 멱등키 유니크 충돌(동시 이중 요청)로 한정 — 클라 키가 없으면 무관한 무결성 위반이므로 그대로 전파
+                    if (command.idempotencyKey == null) throw e
                     throw BusinessException(
                         ErrorCode.DUPLICATE_REQUEST,
                         debugMessage = "동시 중복 생성 요청: idempotencyKey=${command.idempotencyKey}",

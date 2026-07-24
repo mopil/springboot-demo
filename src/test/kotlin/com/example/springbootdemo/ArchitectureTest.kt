@@ -1,6 +1,7 @@
 package com.example.springbootdemo
 
 import com.example.springbootdemo.config.ApiPath
+import com.example.springbootdemo.domain.BaseEntity
 import com.tngtech.archunit.base.DescribedPredicate
 import com.tngtech.archunit.core.domain.JavaClass
 import com.tngtech.archunit.core.domain.JavaMethod
@@ -14,7 +15,11 @@ import com.tngtech.archunit.lang.SimpleConditionEvent
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods
 import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses
+import jakarta.persistence.Entity
 import org.springframework.data.jpa.repository.JpaRepository
+import org.springframework.data.repository.CrudRepository
+import org.springframework.data.repository.PagingAndSortingRepository
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 
@@ -158,6 +163,46 @@ class ArchitectureTest {
             .areAssignableTo(JpaRepository::class.java)
             .because("Spring Data 보조 인터페이스(*JpaRepository)는 도메인 Repository 인터페이스 뒤에 숨긴다")
 
+    // repository 패키지 안에서도 CrudRepository 계열(JpaRepository 포함) 통상속 금지 — 마커 Repository만 허용
+
+    @ArchTest
+    val repositoriesMustNotExtendSpringDataCrudInterfaces: ArchRule =
+        classes()
+            .that()
+            .resideInAPackage("$BASE.repository..")
+            .should()
+            .notBeAssignableTo(CrudRepository::class.java)
+            .andShould()
+            .notBeAssignableTo(PagingAndSortingRepository::class.java)
+            .because("Repository는 마커 Repository 상속 + 필요한 메서드만 선언한다 — 통상속은 소프트딜리트 우회 메서드(deleteAll, 삭제분 포함 findAll)를 노출한다")
+
+    // 엔티티는 BaseEntity를 상속해야 하고 data class로 선언할 수 없다
+
+    @ArchTest
+    val entitiesMustExtendBaseEntityAndNotBeDataClass: ArchRule =
+        classes()
+            .that()
+            .areAnnotatedWith(Entity::class.java)
+            .should()
+            .beAssignableTo(BaseEntity::class.java)
+            .andShould(notBeDataClass())
+            .because("모든 엔티티는 BaseEntity 상속 + 일반 class (data class는 equals/hashCode/copy가 JPA와 충돌)")
+
+    private fun notBeDataClass(): ArchCondition<JavaClass> =
+        object : ArchCondition<JavaClass>("data class가 아니어야 한다") {
+            override fun check(
+                item: JavaClass,
+                events: ConditionEvents,
+            ) {
+                val isDataClass = item.methods.any { it.name == "component1" }
+                if (isDataClass) {
+                    events.add(SimpleConditionEvent.violated(item, "${item.fullName}이 data class로 선언된 엔티티다"))
+                } else {
+                    events.add(SimpleConditionEvent.satisfied(item, "${item.fullName} OK"))
+                }
+            }
+        }
+
     // 핸들러는 항상 JSON 객체를 반환한다 (최상위 컬렉션/nullable/빈 응답 금지)
 
     @ArchTest
@@ -182,6 +227,8 @@ class ArchitectureTest {
                     when {
                         returnType.isAssignableTo(Collection::class.java) || returnType.isAssignableTo(Map::class.java) ->
                             "최상위 컬렉션/Map을 반환한다"
+                        returnType.isAssignableTo(ResponseEntity::class.java) ->
+                            "ResponseEntity를 반환한다 (Response DTO 직접 반환 + @ResponseStatus 사용)"
                         returnType.name == "void" -> "빈 응답(Unit)을 반환한다"
                         item.isAnnotatedWith("org.jetbrains.annotations.Nullable") -> "nullable을 반환한다"
                         else -> null

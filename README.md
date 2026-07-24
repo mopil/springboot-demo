@@ -30,7 +30,7 @@ curl -X POST "http://localhost:8080/dummy/samples?count=10"
 ## 아키텍처 요약
 
 ```
-controller (dto)  →  service (component, Command/Result)  →  repository (JPA/InMemory)  →  domain (rich entity, vo)
+controller (dto)  →  service (component, Command/Result)  →  repository (Spring Data)  →  domain (rich entity, BaseEntity, vo)
                               ↕ exception (ErrorCode enum), dummy (local/test 전용), utils/extensions
 ```
 
