@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Spring Boot 기본 설정(컬러 콘솔 패턴 등) 재사용 -->
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!--
+    공통 root: 어떤 프로파일로 떠도 stdout(CONSOLE)은 항상 살아있다.
+    (프로파일 오타 등으로 어느 springProfile에도 안 걸렸을 때 로그 무음이 되는 것 방지)
+    Docker/K8s 환경 표준도 stdout으로 흘리고 노드의 로그 수집기(FluentBit, Promtail, Filebeat 등)가
+    수집하는 방식이므로, live에서도 기본은 CONSOLE만으로 충분하다.
+    -->
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+    </root>
+
+    <!--
+    test / live: 배포 환경(검증/운영)은 동일 구조 — 콘솔만 찍는 건 local뿐이다.
+    추가 수집 경로가 필요할 때 아래 주석의 appender를 활성화하고
+    블록 하단의 <root>에 ref만 추가한다 (logback은 root 재선언 시 appender-ref가 누적 부착됨).
+    -->
+    <springProfile name="test | live">
+
+        <!-- [옵션 1] VM/베어메탈 직접 배포 시: 롤링 파일 (일 단위 + 100MB, 30일/3GB 보관)
+        <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <file>logs/application.log</file>
+            <encoder>
+                <pattern>${FILE_LOG_PATTERN}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>logs/application.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+                <maxFileSize>100MB</maxFileSize>
+                <maxHistory>30</maxHistory>
+                <totalSizeCap>3GB</totalSizeCap>
+            </rollingPolicy>
+        </appender>
+        -->
+
+        <!-- [옵션 2] Kafka 전송: implementation("com.github.danielwegener:logback-kafka-appender:<version>") 추가 후 활성화.
+             비동기 래핑(ASYNC_KAFKA)으로 로깅이 요청 스레드를 블로킹하지 않게 한다.
+        <appender name="KAFKA" class="com.github.danielwegener.logback.kafka.KafkaAppender">
+            <encoder>
+                <pattern>${FILE_LOG_PATTERN}</pattern>
+            </encoder>
+            <topic>app-logs</topic>
+            <keyingStrategy class="com.github.danielwegener.logback.kafka.keying.NoKeyKeyingStrategy"/>
+            <deliveryStrategy class="com.github.danielwegener.logback.kafka.delivery.AsynchronousDeliveryStrategy"/>
+            <producerConfig>bootstrap.servers=${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}</producerConfig>
+        </appender>
+        <appender name="ASYNC_KAFKA" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="KAFKA"/>
+            <queueSize>1024</queueSize>
+            <neverBlock>true</neverBlock>
+        </appender>
+        -->
+
+        <!-- [옵션 3] Logstash/수집기 TCP 직송 + JSON 구조화 로그:
+             implementation("net.logstash.logback:logstash-logback-encoder:<version>") 추가 후
+             LogstashTcpSocketAppender 사용 또는 CONSOLE 인코더를 LogstashEncoder로 교체.
+        -->
+
+        <!-- 활성화한 appender를 여기에 누적 부착 (CONSOLE은 공통 root에 이미 부착됨)
+        <root level="INFO">
+            <appender-ref ref="FILE"/>
+            <appender-ref ref="ASYNC_KAFKA"/>
+        </root>
+        -->
+    </springProfile>
+</configuration>
