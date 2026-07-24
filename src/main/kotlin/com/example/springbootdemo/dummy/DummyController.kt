@@ -18,7 +18,7 @@ import org.springframework.web.bind.annotation.RestController
 class DummyController(
     private val sampleServiceDummyGenerator: SampleServiceDummyGenerator,
 ) {
-    @Operation(summary = "샘플 더미 생성", description = "실제 서비스 로직으로 더미데이터를 생성한다. local/test phase 전용.")
+    @Operation(summary = "샘플 더미 생성", description = "비멱등 — 호출할 때마다 count개의 더미가 추가 생성된다. local/test phase 전용.")
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     fun createDummySamples(

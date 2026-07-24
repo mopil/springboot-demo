@@ -62,10 +62,18 @@ class ArchitectureTest {
         noClasses()
             .that()
             .resideOutsideOfPackage("$BASE.controller..")
+            .and()
+            .resideOutsideOfPackage("$BASE.config.swagger..")
+            .and()
+            .resideOutsideOfPackage("$BASE.exception..")
             .should()
             .dependOnClassesThat()
             .resideInAPackage("$BASE.controller..")
-            .because("controller는 최상위 계층이므로 어디서도 참조할 수 없다")
+            .because(
+                "controller는 최상위 계층이므로 어디서도 참조할 수 없다. 단 " +
+                    "config.swagger(Swagger 문서화 지원 코드)와 exception(공통 예외를 ErrorResponse로 변환하는 GlobalExceptionHandler)은 " +
+                    "controller.dto(ErrorResponse) 참조를 예외로 허용한다",
+            )
 
     // *Service는 같은 계층의 다른 *Service를 참조할 수 없다 (공통 로직은 invokable 컴포넌트로 분리)
 

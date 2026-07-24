@@ -6,11 +6,18 @@ import com.example.springbootdemo.exception.ErrorCode
 import com.example.springbootdemo.repository.SampleRepository
 import com.example.springbootdemo.service.component.ValidateName
 import org.slf4j.LoggerFactory
+import org.springframework.dao.DataIntegrityViolationException
+import org.springframework.data.domain.PageRequest
+import org.springframework.data.domain.Sort
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
 interface SampleService {
-    /** 이름은 공백 불가 (ValidateName). 신규 id는 저장 시 발급된다. */
+    /**
+     * 이름은 공백 불가 (ValidateName). 신규 id는 저장 시 발급된다.
+     * 중복 처리 가드: [CreateCommand.idempotencyKey]가 오면 그 키를 유니크 컬럼으로 선점 저장한다 —
+     * 같은 키 재시도는 409(기존 id 포함), 동시 이중 요청은 유니크 제약이 차단한다.
+     */
     fun create(command: CreateCommand): Sample
 
     /** 비즈니스적으로 중요한 단건 조회 — 미존재/삭제된 샘플이면 SAMPLE_NOT_FOUND 예외 */
@@ -34,6 +41,8 @@ interface SampleService {
     data class CreateCommand(
         val name: String,
         val memo: String?,
+        /** 클라이언트 발급 멱등키 (Idempotency-Key 헤더 → 컨트롤러가 채움, 재시도엔 같은 키) */
+        val idempotencyKey: String? = null,
     )
 
     data class PutCommand(
@@ -63,9 +72,27 @@ interface SampleService {
 
         @Transactional
         override fun create(command: CreateCommand): Sample {
+            command.idempotencyKey?.let { key ->
+                sampleRepository.findByIdempotencyKey(key)?.let { existing ->
+                    throw BusinessException(
+                        ErrorCode.DUPLICATE_REQUEST,
+                        debugMessage = "이미 처리된 생성 요청: idempotencyKey=$key, 기존 샘플 id=${existing.id}",
+                    )
+                }
+            }
             validateName(command.name)
-            val saved = sampleRepository.save(Sample.create(name = command.name, memo = command.memo))
-            log.info("샘플 생성: id=${saved.id}, name=${saved.name}")
+            val saved =
+                try {
+                    sampleRepository.save(Sample.create(name = command.name, memo = command.memo, idempotencyKey = command.idempotencyKey))
+                } catch (e: DataIntegrityViolationException) {
+                    // 동시 이중 요청 — 사전 조회를 통과해도 유니크 제약이 원자적으로 차단한다
+                    throw BusinessException(
+                        ErrorCode.DUPLICATE_REQUEST,
+                        debugMessage = "동시 중복 생성 요청: idempotencyKey=${command.idempotencyKey}",
+                        cause = e,
+                    )
+                }
+            log.info("샘플 생성: id=${saved.id}, name=${saved.name}, idempotencyKey=${saved.idempotencyKey}")
             return saved
         }
 
@@ -74,11 +101,13 @@ interface SampleService {
         override fun getPage(
             page: Int,
             size: Int,
-        ): PageResult =
-            PageResult(
-                samples = sampleRepository.findAll(page = page, size = size),
-                totalElements = sampleRepository.count(),
-            )
+        ): PageResult {
+            val result =
+                sampleRepository.findAllByDeletedAtIsNull(
+                    PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "id")),
+                )
+            return PageResult(samples = result.content, totalElements = result.totalElements)
+        }
 
         @Transactional
         override fun put(command: PutCommand): Sample {
@@ -107,7 +136,7 @@ interface SampleService {
         }
 
         private fun findOrThrow(id: Long): Sample =
-            sampleRepository.findById(id)
+            sampleRepository.findByIdAndDeletedAtIsNull(id)
                 ?: throw BusinessException(ErrorCode.SAMPLE_NOT_FOUND, debugMessage = "Sample not found: id=$id")
     }
 }

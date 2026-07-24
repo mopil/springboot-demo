@@ -1,4 +1,4 @@
-package com.example.springbootdemo.controller
+package com.example.springbootdemo.config.swagger
 
 import com.example.springbootdemo.controller.dto.ErrorResponse
 import com.example.springbootdemo.exception.ErrorCode

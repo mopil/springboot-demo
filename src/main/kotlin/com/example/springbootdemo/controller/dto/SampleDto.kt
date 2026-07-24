@@ -14,8 +14,11 @@ object CreateSample {
         val name: String,
         @field:Schema(description = "메모", nullable = true)
         val memo: String?,
-    ) {
-        fun toCommand(): SampleService.CreateCommand = SampleService.CreateCommand(name = name, memo = memo)
+        @field:Schema(description = "클라이언트 발급 멱등키 (UUID v4, 시도 1회당 1개 — 재시도엔 같은 키). null이면 서버 발급 + 가드 미적용", nullable = true)
+        override val idempotencyKey: String?,
+    ) : IdempotencyRequest {
+        fun toCommand(): SampleService.CreateCommand =
+            SampleService.CreateCommand(name = name, memo = memo, idempotencyKey = idempotencyKey)
     }
 
     @Schema(name = "CreateSampleResponse", description = "샘플 생성 응답")
@@ -26,9 +29,12 @@ object CreateSample {
         val name: String,
         @field:Schema(description = "메모", nullable = true)
         val memo: String?,
+        @field:Schema(description = "이 생성을 처리한 멱등키 (클라 발급 키 또는 서버 fallback 발급)", nullable = false)
+        val idempotencyKey: String,
     ) {
         companion object {
-            fun from(sample: Sample): Response = Response(id = sample.id, name = sample.name, memo = sample.memo)
+            fun from(sample: Sample): Response =
+                Response(id = sample.id, name = sample.name, memo = sample.memo, idempotencyKey = sample.idempotencyKey)
         }
     }
 }

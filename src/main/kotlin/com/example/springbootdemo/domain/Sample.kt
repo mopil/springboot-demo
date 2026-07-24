@@ -4,27 +4,23 @@ import com.example.springbootdemo.exception.BusinessException
 import com.example.springbootdemo.exception.ErrorCode
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
-import jakarta.persistence.GeneratedValue
-import jakarta.persistence.GenerationType
-import jakarta.persistence.Id
 import jakarta.persistence.Table
-import java.time.LocalDateTime
 
 /**
- * rich entity + aggregate root 레퍼런스 도메인 (도메인 = JPA 엔티티 겸용).
+ * rich entity + aggregate root 레퍼런스 도메인.
  * 상태 변경은 반드시 도메인 메서드로만 하고, 불변식은 도메인이 스스로 지킨다.
- * 신규 생성은 [create] 팩토리(id = [NEW_ID]) → 저장 시 IDENTITY 전략으로 id가 발급된다.
+ * 신규 생성은 [create] 팩토리 → 저장 시 IDENTITY 전략으로 id가 발급된다.
+ * 공통 필드(id/createdAt/updatedAt/deletedAt)는 [BaseEntity]가,
+ * 중복 처리 가드용 requestId는 [BaseIdempotencyEntity]가 관리한다.
  */
 @Entity
 @Table(name = "sample")
 class Sample(
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    val id: Long = NEW_ID,
     name: String,
     memo: String?,
-    deletedAt: LocalDateTime? = null,
-) {
+    idempotencyKey: String? = null,
+    id: Long = NEW_ID,
+) : BaseIdempotencyEntity(id, idempotencyKey) {
     @Column(nullable = false, length = 100)
     var name: String = name
         protected set
@@ -32,11 +28,6 @@ class Sample(
     @Column(length = 500)
     var memo: String? = memo
         protected set
-
-    var deletedAt: LocalDateTime? = deletedAt
-        protected set
-
-    val isDeleted: Boolean get() = deletedAt != null
 
     /** 전체 수정 (PUT) */
     fun update(
@@ -61,7 +52,7 @@ class Sample(
     /** 소프트딜리트 — 삭제 표시만 하고 데이터는 남긴다 */
     fun delete() {
         ensureNotDeleted()
-        deletedAt = LocalDateTime.now()
+        markDeleted()
     }
 
     private fun ensureNotDeleted() {
@@ -71,12 +62,11 @@ class Sample(
     }
 
     companion object {
-        /** 신규(저장 전) 도메인의 id — 저장 시 실제 id가 발급된다 (JPA IDENTITY) */
-        const val NEW_ID = 0L
-
+        /** [idempotencyKey]: 클라이언트 발급 멱등키 — null이면 서버가 발급(가드 미적용) */
         fun create(
             name: String,
             memo: String?,
-        ): Sample = Sample(name = name, memo = memo)
+            idempotencyKey: String? = null,
+        ): Sample = Sample(name = name, memo = memo, idempotencyKey = idempotencyKey)
     }
 }

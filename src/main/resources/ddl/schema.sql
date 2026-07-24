@@ -12,3 +12,14 @@ CREATE TABLE sample (
     memo       VARCHAR(500) NULL,
     deleted_at DATETIME NULL
 );
+
+-- 2026-07-24: BaseEntity 공통 컬럼 추가 (created_at, updated_at — JPA Auditing)
+ALTER TABLE sample ADD COLUMN created_at DATETIME NOT NULL;
+ALTER TABLE sample ADD COLUMN updated_at DATETIME NOT NULL;
+
+-- 2026-07-24: 중복 처리 가드 컬럼 추가 (BaseIdempotencyEntity — idempotency_key 유니크)
+-- 기존 행이 있는 운영 DB 적용 순서: nullable 추가 → 백필 → 제약 부여 (NOT NULL 즉시 부여는 기존 행에서 실패)
+ALTER TABLE sample ADD COLUMN idempotency_key VARCHAR(36) NULL;
+UPDATE sample SET idempotency_key = UUID() WHERE idempotency_key IS NULL;
+ALTER TABLE sample MODIFY COLUMN idempotency_key VARCHAR(36) NOT NULL;
+ALTER TABLE sample ADD CONSTRAINT uk_sample_idempotency_key UNIQUE (idempotency_key);

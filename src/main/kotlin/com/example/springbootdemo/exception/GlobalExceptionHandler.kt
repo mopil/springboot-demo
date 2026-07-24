@@ -1,9 +1,7 @@
-package com.example.springbootdemo.controller
+package com.example.springbootdemo.exception
 
 import com.example.springbootdemo.config.ApiPath
 import com.example.springbootdemo.controller.dto.ErrorResponse
-import com.example.springbootdemo.exception.BusinessException
-import com.example.springbootdemo.exception.ErrorCode
 import jakarta.servlet.http.HttpServletRequest
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpHeaders

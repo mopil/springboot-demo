@@ -11,16 +11,17 @@
 ```
 com.example.springbootdemo
 ├── config      # 설정 (OpenAPI, ApiPath 등)
-├── controller  # REST 컨트롤러, GlobalExceptionHandler
+│   └── swagger    # Swagger 문서화 지원 customizer (공통 에러/멱등 가드 배지 — controller.dto.ErrorResponse 참조 예외)
+├── controller  # REST 컨트롤러
 │   └── dto     # request/response DTO + 공통 ErrorResponse (controller 계층 전용)
 ├── service     # 서비스 인터페이스 (+ 내부 기본 구현체, Command/Result)
 │   ├── component  # 여러 Service가 공유하는 invokable 컴포넌트
 │   └── dto     # (필요 시) service 전용 dto/vo
-├── repository  # 리포지토리 인터페이스 (+ 내부 Jpa/InMemory 구현체, *JpaRepository 보조 인터페이스)
+├── repository  # Spring Data 리포지토리 인터페이스 (마커 Repository 상속, 구현 자동 생성)
 │   └── dto     # (필요 시) 조회 전용 projection 등
-├── domain      # 도메인 모델 (= JPA 엔티티 겸용, rich entity)
+├── domain      # 도메인 모델 (= JPA 엔티티, BaseEntity 상속, rich entity)
 │   └── vo      # 공용 값 객체 (BasicDate 등 — 특정 도메인에 속하지 않는 VO)
-├── exception   # 공통 예외 (BusinessException, ErrorCode enum)
+├── exception   # 공통 예외 (BusinessException, ErrorCode enum, + GlobalExceptionHandler)
 ├── dummy       # 더미데이터 생성 (local/test 전용 — 생성기/컨트롤러/@DummyOnly AOP)
 └── utils
     └── extensions  # 커스텀 확장함수 (StringExtension.kt, LocalDateExtension.kt 등)
@@ -53,7 +54,16 @@ com.example.springbootdemo
 4. **조회성 API는 원칙적으로 예외를 내지 않는다** (조회 실패가 호출측 서비스 크래시로 번지는 것 방지) — 목록은 빈 리스트, 옵셔널한 데이터는 기본값으로 응답. 단, **비즈니스적으로 조회 데이터가 중요한 경우**(결제/정산 정보 등 없으면 진행 불가)는 예외 허용.
 5. **전체 데이터 수정은 `PUT`, 일부 데이터 수정은 `PATCH`**로 매핑한다.
 6. **삭제는 `DELETE` 매핑 + 소프트딜리트가 원칙** — 도메인에 삭제 표시(`deletedAt` 등)를 두고 조회에서 제외한다. 하드딜리트는 고려하지 않는다.
-7. **핸들러 메서드 명명은 prefix로 통일**한다 (object 명도 이와 동일):
+7. **중복 처리 가드 — 꼭 필요한 중요 API(비멱등 결제류 등)에만 적용한다** (필수 아님, 레퍼런스: `createSample`). 방식: **클라이언트 발급 Idempotency-Key + DB 유니크 선점**:
+   - **클라이언트가 "시도 1회당 1개"의 UUID(v4)를 발급**해 Request 바디의 `idempotencyKey` 필드로 전송한다 — Request DTO가 **`IdempotencyRequest` 인터페이스를 구현**해 가드 대상임이 타입에 드러나게 한다. 재시도(더블클릭·타임아웃 재전송)에는 같은 키를 재사용하고, 성공/새 시도에만 새 키를 발급한다.
+   - 대상 엔티티는 **`BaseIdempotencyEntity`를 상속** — 그 키를 `idempotencyKey` **유니크 컬럼**으로 저장해 첫 요청이 키를 선점한다 (도메인 데이터와 같은 트랜잭션 영속 — 재시작·다중 인스턴스에도 유지, TTL 불필요).
+   - 검사 2중: ① 서비스가 `findByIdempotencyKey` 사전 조회 → 있으면 **409 DUPLICATE_REQUEST** (debugMessage에 기존 id 포함), ② 동시 이중 요청은 **DB 유니크 제약이 원자적으로 차단** — `DataIntegrityViolationException`을 catch해 409로 변환한다. **응답 유실 후 재시도까지 차단된다** (같은 키로 오므로).
+   - `findByIdempotencyKey`는 **소프트딜리트 포함이 의도** (처리 "이력" 기준) — `DeletedAtIsNull`을 붙이지 말 것.
+   - 키가 null이면 서버가 발급(fallback)하고 **가드는 적용되지 않는다** (테스트 편의 — 응답 바디의 `idempotencyKey`로 확인 가능).
+   - 핸들러에는 `@IdempotencyGuard(note = ...)`(`config/IdempotencyGuard`)를 붙인다 — Swagger에 가드 배지 자동 표기(`SwaggerIdempotencyGuardCustomizer`) + 409 응답을 `@ApiResponses`에 명시.
+   - 멱등 API(PUT/PATCH/DELETE 등)는 가드 불필요 — 멱등 특성은 `@Operation` description에 적는다. 완전한 재시도 UX(409 대신 기존 리소스 응답 재생 200)가 필요하면 사전 조회 분기에서 확장한다.
+   - 주의: `GroupedOpenApi`를 쓰므로 **Swagger customizer는 그룹 빌더에 명시 등록**해야 적용된다 (`OpenApiConfig` 참고 — 전역 빈 등록만으론 그룹 문서에 안 나온다).
+8. **핸들러 메서드 명명은 prefix로 통일**한다 (object 명도 이와 동일):
 
 | prefix | 용도 | 예 |
 |---|---|---|
@@ -98,7 +108,7 @@ com.example.springbootdemo
 
 - **서비스는 소비 채널을 모른다.** `exception/BusinessException`(`RuntimeException` 상속)에 `ErrorCode` + `debugMessage`(개발자용 상세)를 담아 던지기만 한다. 도메인 전용 예외가 필요하면 BusinessException을 상속한다.
 - **로그 레벨과 기본 debugMessage는 `ErrorCode` enum에 정의한다.** `ErrorCode(message, status, logLevel, debugMessage?)` — 핸들러가 `errorCode.logLevel`로 로깅한다 (기본 `WARN`, 미존재 조회 등 정상 흐름에 가까우면 `INFO`, 심각하면 `ERROR`). 던질 때 `BusinessException(errorCode, debugMessage = "...")`로 동적 상세를 덮어쓸 수 있다.
-- **노출 수준은 `controller/GlobalExceptionHandler`가 요청 URI prefix로 결정한다** (= prefix 기반 워싱):
+- **노출 수준은 `exception/GlobalExceptionHandler`가 요청 URI prefix로 결정한다** (= prefix 기반 워싱):
   - **`/api`** (외부 고객): **워싱된 고객친화 메시지(`errorCode.message`)만** 노출. `debugMessage`는 로그 전용.
   - **`/internal`** (서버 간): 개발자 친화 — **`debugMessage`를 최대한 상세히** 응답에 그대로 노출.
   - **`/admin`** (어드민): 중간 — 워싱된 메시지 + `debugMessage` 함께 노출.
@@ -133,11 +143,11 @@ fun interface CalculateFee {
 
 ### 인터페이스 규약 (필수)
 
-- **Service, Repository는 반드시 interface로 선언**한다. Controller와 Service는 인터페이스에만 의존한다.
-- **기본 구현체는 인터페이스 내부의 nested class로 선언**한다. 별도 `~Impl` 파일을 만들지 않는다.
-  - Service 기본 구현체 이름: `Default` (`@Service`)
-  - Repository 구현체 이름: `Jpa`(`@Primary @Repository`, 기본) / `InMemory`(`@Repository`, DB 없이 돌릴 때 교체용)
-- **Spring Data JPA는 보조 인터페이스로 격리**한다: `interface FooJpaRepository : JpaRepository<Foo, Long>`(repository 패키지, Spring Data 전용)를 만들고 `FooRepository.Jpa`가 위임한다. **Service에서 `*JpaRepository` 직접 주입 금지** (ArchUnit 강제). 도메인 Repository 인터페이스는 DB 기술과 무관하게 유지한다.
+- **Service는 반드시 interface로 선언**하고, Controller는 인터페이스에만 의존한다. **Service 기본 구현체는 인터페이스 내부 nested class `Default`(`@Service`)** — 별도 `~Impl` 파일 금지.
+- **Repository는 Spring Data 인터페이스 하나로 끝낸다** (구현 클래스·위임 래퍼 없음):
+  - `interface FooRepository : Repository<Foo, Long>` — **마커 `Repository` 상속 + 필요한 메서드만 선언**한다. Spring Data가 구현을 자동 생성한다.
+  - **`JpaRepository` 통상속 금지** (ArchUnit 강제) — `deleteAll()`, 삭제분 포함 `findAll()` 같은 소프트딜리트 우회 메서드가 노출되기 때문. 조회 메서드는 `~DeletedAtIsNull` 파생 쿼리로 삭제분을 제외한다.
+  - DB 없이 돌리는 용도는 별도 InMemory 구현이 아니라 **H2 인메모리가 담당**한다.
 
 ```kotlin
 interface FooService {
@@ -158,17 +168,13 @@ interface FooService {
     }
 }
 
-interface FooRepository {
+// Spring Data가 구현 자동 생성 — 마커 상속 + 필요한 메서드만
+interface FooRepository : Repository<Foo, Long> {
     fun save(foo: Foo): Foo   // 저장은 항상 도메인 단위
 
-    fun findById(id: Long): Foo?   // 소프트딜리트 제외
+    fun findByIdAndDeletedAtIsNull(id: Long): Foo?   // 소프트딜리트 제외
 
-    @Primary
-    @Repository
-    class Jpa(private val fooJpaRepository: FooJpaRepository) : FooRepository { ... }
-
-    @Repository
-    class InMemory : FooRepository { ... }
+    fun findAllByDeletedAtIsNull(pageable: Pageable): Page<Foo>
 }
 ```
 
@@ -213,9 +219,12 @@ class FooServiceTest {
   - **Repository는 aggregate root 단위로만 만든다** (`OrderRepository`는 있어도 `OrderLineRepository`는 만들지 않는다). 조회·저장도 루트 단위.
   - 애그리거트 간 참조는 객체 참조 대신 **id 참조**로 한다.
 - 불변식이 깨지는 호출은 도메인 메서드 안에서 `BusinessException`을 던진다 (도메인이 스스로 정합성을 지킨다).
-- **도메인 = JPA 엔티티 겸용**이다 (`@Entity`, 필드는 `var` + `private set`).
-- **id 발급 관례**: 신규 도메인은 `create()` 팩토리로 `id = NEW_ID(0L)`로 만들고, 저장 시 IDENTITY 전략으로 id가 발급된다. id를 밖에서 지정하지 않는다.
-- **소프트딜리트 관례**: 삭제 대상 도메인은 `deletedAt: LocalDateTime?` 필드 + `delete()` 메서드 + `isDeleted`를 갖고, repository 조회 메서드는 삭제분을 제외한다 (`findByIdAndDeletedAtIsNull` 등).
+- **엔티티 규칙 (필수)**:
+  - **도메인 = JPA 엔티티 겸용**이며 **절대 `data class`로 선언하지 않는다** (equals/hashCode/copy가 JPA 프록시·가변 상태와 충돌). 일반 class + `var` + `protected set`.
+  - **모든 엔티티는 `domain/BaseEntity`(abstract, `@MappedSuperclass`)를 상속**한다. 공통 필드: `id`(PK, 기본값 `NEW_ID(0L)`, IDENTITY 오토인크리먼트), `createdAt`/`updatedAt`(JPA Auditing 자동 — `config/JpaConfig`의 `@EnableJpaAuditing`), `deletedAt`(소프트딜리트).
+  - 중복 처리 가드가 필요한 엔티티는 `domain/BaseIdempotencyEntity`(BaseEntity 상속 + `requestId` 유니크 컬럼)를 상속한다 (API 설계 규약 7 참고).
+  - **id 발급 관례**: 신규 도메인은 `create()` 팩토리(id 미지정 → `NEW_ID`)로 만들고 저장 시 발급된다. id를 밖에서 지정하지 않는다 (InMemory 테스트 픽스처 제외).
+  - **소프트딜리트 관례**: 도메인의 `delete()`가 불변식 검사 후 BaseEntity의 `markDeleted()`를 호출한다. repository 조회 메서드는 삭제분을 제외한다 (`findByIdAndDeletedAtIsNull` 등).
 
 ```kotlin
 class Order(
@@ -326,7 +335,16 @@ object CreateFoo {
 3. **코드리뷰 루프** — `.claude/skills/code-review/SKILL.md` 스킬을 **서브에이전트로 실행**한다. 리뷰 결과의 **P1이 0건이 될 때까지 수정 → 재리뷰를 반복**한다. `DECISION NEEDED`가 나오면 루프를 멈추고 사용자에게 물어본다.
 4. **검증** — `./gradlew ktlintFormat ktlintCheck test koverVerify` 실행, 전부 통과 확인.
 5. **보고** — 구현 내용, 리뷰 반복 횟수와 반영 사항, 검증 결과를 보고한다.
-6. **요구사항 단위로 커밋한다** — 검증 통과 후 `git add` + `feat: <요구사항>` 커밋 (회귀 감지의 기준점이 된다). 푸시/PR은 사용자가 요청할 때 `/commit-pr` 스킬로 수행한다 (커밋 타입: feat/fix/refactor/chore, PR body에 tech-spec 링크 + 요약).
+6. **스테이징은 즉시, 커밋/푸시는 사용자 트리거만.** 작업(검증 포함)이 끝나면 **반드시 `git add -A`로 스테이징까지 해두고** 보고·대기한다 (unstaged 누락 방지 — 신규 파일이 커밋에서 빠지는 사고 차단). 커밋/푸시는 절대 임의로 하지 않는다 — 사용자가 커밋을 요청하면 요구사항 단위로 `<type>: <요구사항>` 커밋(타입: feat/fix/refactor/chore), 푸시·PR을 요청하면 `/commit-pr` 스킬로 수행한다 (PR body에 tech-spec 링크 + 요약).
+
+### AI 실행 규칙 (모델/서브에이전트)
+
+- **병렬화 가능한 코드 수정**(서로 의존성 없는 파일·도메인 단위 작업)은 **sonnet 모델 서브에이전트**를 띄워 분산 실행한다. 순서 의존이 있는 작업은 병렬화하지 않는다. 같은 파일을 두 에이전트가 동시에 수정하지 않도록 파일 단위로 스코프를 나눈다.
+- **코드리뷰는 중요하므로 opus 모델 서브에이전트**로 실행한다.
+- **모든 서브에이전트 프롬프트에 토큰 최적화 지시를 포함한다**:
+  - 핵심만 간결히 — 과정 설명·중간 요약·인사말 생략, 최종 텍스트는 결과만
+  - 필요한 파일의 필요한 부분만 읽기 (전체 파일 무차별 재독 금지, 이미 프롬프트로 전달된 내용 재탐색 금지)
+  - 코드 전체를 되풀이하지 말고 변경분만 보고
 
 ## 빌드/실행
 

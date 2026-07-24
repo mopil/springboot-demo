@@ -1,79 +1,29 @@
 package com.example.springbootdemo.repository
 
 import com.example.springbootdemo.domain.Sample
-import org.springframework.context.annotation.Primary
-import org.springframework.data.domain.PageRequest
-import org.springframework.data.domain.Sort
-import org.springframework.stereotype.Repository
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
+import org.springframework.data.domain.Page
+import org.springframework.data.domain.Pageable
+import org.springframework.data.repository.Repository
 
-interface SampleRepository {
-    /** aggregate root 단위 저장. 신규(id == NEW_ID)면 id를 발급해 반환한다. */
+/**
+ * Spring Data가 구현을 자동 생성한다 (별도 구현 클래스 없음).
+ * JpaRepository 통상속 금지 — 마커 Repository를 상속하고 **필요한 메서드만 선언**해서
+ * 소프트딜리트를 우회하는 메서드(deleteAll, 삭제분 포함 findAll 등)가 노출되지 않게 한다.
+ */
+interface SampleRepository : Repository<Sample, Long> {
+    /** aggregate root 단위 저장. 신규(id == NEW_ID)면 IDENTITY로 id가 발급된다. */
     fun save(sample: Sample): Sample
 
-    /** 소프트딜리트된 데이터는 제외 */
-    fun findById(id: Long): Sample?
+    /** 소프트딜리트 제외 단건 조회 */
+    fun findByIdAndDeletedAtIsNull(id: Long): Sample?
 
-    /** 소프트딜리트 제외 + id 오름차순 페이징 */
-    fun findAll(
-        page: Int,
-        size: Int,
-    ): List<Sample>
+    /** 소프트딜리트 제외 페이징 조회 (totalElements 포함) */
+    fun findAllByDeletedAtIsNull(pageable: Pageable): Page<Sample>
 
-    /** 소프트딜리트 제외 전체 건수 */
-    fun count(): Long
-
-    /** 기본 구현체 — Spring Data JPA 위임 (SampleJpaRepository는 이 클래스만 주입한다) */
-    @Primary
-    @Repository
-    class Jpa(
-        private val sampleJpaRepository: SampleJpaRepository,
-    ) : SampleRepository {
-        override fun save(sample: Sample): Sample = sampleJpaRepository.save(sample)
-
-        override fun findById(id: Long): Sample? = sampleJpaRepository.findByIdAndDeletedAtIsNull(id)
-
-        override fun findAll(
-            page: Int,
-            size: Int,
-        ): List<Sample> =
-            sampleJpaRepository
-                .findAllByDeletedAtIsNull(PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "id")))
-                .content
-
-        override fun count(): Long = sampleJpaRepository.countByDeletedAtIsNull()
-    }
-
-    /** 인메모리 구현체 — DB 없이 돌려야 할 때 Jpa의 @Primary를 옮겨서 교체 */
-    @Repository
-    class InMemory : SampleRepository {
-        private val store = ConcurrentHashMap<Long, Sample>()
-        private val sequence = AtomicLong(0)
-
-        override fun save(sample: Sample): Sample {
-            val saved =
-                if (sample.id == Sample.NEW_ID) {
-                    Sample(id = sequence.incrementAndGet(), name = sample.name, memo = sample.memo)
-                } else {
-                    sample
-                }
-            store[saved.id] = saved
-            return saved
-        }
-
-        override fun findById(id: Long): Sample? = store[id]?.takeUnless { it.isDeleted }
-
-        override fun findAll(
-            page: Int,
-            size: Int,
-        ): List<Sample> =
-            store.values
-                .filterNot { it.isDeleted }
-                .sortedBy { it.id }
-                .drop(page * size)
-                .take(size)
-
-        override fun count(): Long = store.values.count { !it.isDeleted }.toLong()
-    }
+    /**
+     * 중복 처리 가드 — 해당 멱등키로 이미 처리(저장)된 엔티티 조회.
+     * **소프트딜리트 포함이 의도다** (처리 "이력" 기준 — 삭제된 데이터의 키로도 재생성을 막아야 함).
+     * 다른 조회처럼 DeletedAtIsNull을 붙이지 말 것.
+     */
+    fun findByIdempotencyKey(idempotencyKey: String): Sample?
 }

@@ -1,6 +1,7 @@
 package com.example.springbootdemo.controller
 
 import com.example.springbootdemo.config.ApiPath
+import com.example.springbootdemo.config.IdempotencyGuard
 import com.example.springbootdemo.controller.dto.CreateSample
 import com.example.springbootdemo.controller.dto.DeleteSample
 import com.example.springbootdemo.controller.dto.ErrorResponse
@@ -36,8 +37,14 @@ class SampleController(
     private val sampleService: SampleService,
 ) {
     @Operation(summary = "생성")
+    @IdempotencyGuard(note = "클라이언트가 시도 1회당 1개의 UUID를 발급해 재시도에 같은 키를 재사용하면 중복 생성이 차단된다")
     @ApiResponses(
         ApiResponse(responseCode = "201", description = "성공"),
+        ApiResponse(
+            responseCode = "409",
+            description = "DUPLICATE_REQUEST — 이미 처리된 Idempotency-Key로 재요청",
+            content = [Content(schema = Schema(implementation = ErrorResponse::class))],
+        ),
     )
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -77,7 +84,7 @@ class SampleController(
         )
     }
 
-    @Operation(summary = "전체 수정 (PUT)")
+    @Operation(summary = "전체 수정 (PUT)", description = "멱등 — 전체 필드 교체라 같은 요청 반복 시 상태 동일")
     @ApiResponses(
         ApiResponse(responseCode = "200", description = "성공"),
         ApiResponse(
@@ -92,7 +99,7 @@ class SampleController(
         @RequestBody request: PutSample.Request,
     ): PutSample.Response = PutSample.Response.from(sampleService.put(request.toCommand(id)))
 
-    @Operation(summary = "부분 수정 (PATCH)", description = "null이 아닌 필드만 반영한다")
+    @Operation(summary = "부분 수정 (PATCH)", description = "멱등 — null이 아닌 필드만 치환 반영한다 (증분 아님)")
     @ApiResponses(
         ApiResponse(responseCode = "200", description = "성공"),
         ApiResponse(
@@ -107,7 +114,7 @@ class SampleController(
         @RequestBody request: PatchSample.Request,
     ): PatchSample.Response = PatchSample.Response.from(sampleService.patch(request.toCommand(id)))
 
-    @Operation(summary = "삭제 (소프트딜리트)", description = "deletedAt 마킹만 하고 데이터는 유지한다")
+    @Operation(summary = "삭제 (소프트딜리트)", description = "상태 멱등 — deletedAt 마킹만 하고 데이터는 유지 (재호출 응답은 404)")
     @ApiResponses(
         ApiResponse(responseCode = "200", description = "성공"),
         ApiResponse(

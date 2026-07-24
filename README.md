@@ -48,5 +48,5 @@ controller (dto)  →  service (component, Command/Result)  →  repository (JPA
 1. 요구사항 → `.claude/tech-spec/`에 테크스펙 작성
 2. 구현 (단위테스트 + 더미 생성기 포함)
 3. `.claude/skills/code-review` 스킬을 서브에이전트로 실행 — **Pn 룰 기반 리뷰, P1이 0이 될 때까지 반복**
-4. 포맷·린트·테스트·커버리지 검증 → 요구사항 단위 커밋
-5. `/commit-pr` 스킬로 푸시·PR (tech-spec 링크 포함)
+4. 포맷·린트·테스트·커버리지 검증 → 보고 후 대기
+5. 커밋/푸시/PR은 **사용자가 트리거할 때만** — `/commit-pr` 스킬 (tech-spec 링크 포함)
